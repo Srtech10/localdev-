@@ -1,0 +1,163 @@
+jQuery(document).ready(function ($) {
+    // Cache DOM elements for better performance and readability
+    const $form = $('#dish-bundle-builder'); // The main form for the dish bundle builder
+    const $totalDishes = $('#total-dishes span'); // Displays the total number of dishes selected
+    const $totalPrice = $('#total-price span'); // Displays the total price of the selected dishes
+    const $minWarning = $('#minimum-warning'); // Warning message for minimum dish requirement
+    const $addToCartButton = $('#add-to-cart-button'); // Add to cart button
+    const $loadingIndicator = $('#loading-indicator'); // Loading indicator during AJAX requests
+
+    // PHP variables passed to JavaScript for dynamic configuration
+    const minDishes = <?php echo $min_dishes; ?>; // Minimum number of dishes required
+    const maxDishes = <?php echo $max_dishes; ?>; // Maximum number of dishes allowed
+    const addToCartMode = '<?php echo esc_js($atts['add_to_cart_mode']); ?>'; // Mode for adding items to the cart
+    const productId = '<?php echo esc_js($atts['product_id']); ?>'; // Product ID for the bundle
+
+    /**
+     * Function to reset all dish quantities to zero
+     */
+    function resetQuantities() {
+        $('.dish-quantity').each(function () {
+            $(this).val(0); // Reset each quantity input to 0
+        });
+        updateTotal(); // Update the total count and button state after resetting
+    }
+
+    // Reset quantities when the page loads or when navigating back to the page
+    $(window).on('pageshow', function (event) {
+        if (event.originalEvent.persisted) {
+            // Page was loaded from cache (user navigated back)
+            resetQuantities();
+        } else {
+            // Page was freshly loaded
+            resetQuantities();
+        }
+    });
+
+    /**
+     * Function to update the total dish count, total price, and button state
+     */
+    function updateTotal() {
+        let total = 0; // Total number of dishes selected
+        let totalPrice = 0; // Total price of the selected dishes
+
+        // Iterate over each dish quantity input field
+        $('.dish-quantity').each(function () {
+            const quantity = parseInt($(this).val()) || 0; // Get the current quantity (default to 0 if invalid)
+            const price = parseFloat($(this).data('price')) || 0; // Get the price of the dish (default to 0 if invalid)
+
+            // Calculate total dishes and total price
+            total += quantity;
+            totalPrice += quantity * price;
+        });
+
+        // Update the displayed total count and price
+        $totalDishes.text(total);
+        $totalPrice.text('฿' + totalPrice.toFixed(2)); // Format price to two decimal places
+
+        // Calculate and store discount but do not display it here
+        const discountPercentage = <?php echo esc_js($discount_percentage); ?>;
+        const discountAmount = totalPrice * (discountPercentage / 100);
+
+        $('#hidden-discount').val(discountAmount.toFixed(2)); // Store discount amount in a hidden field
+
+        // Enable or disable the add to cart button based on the total
+        if (total < minDishes || total > maxDishes) {
+            $minWarning.show(); // Show warning if the total is below the minimum or exceeds the maximum
+            $addToCartButton.prop('disabled', true); // Disable the add to cart button
+        } else {
+            $minWarning.hide(); // Hide the warning if the total is valid
+            $addToCartButton.prop('disabled', false); // Enable the add to cart button
+        }
+    }
+
+    /**
+     * Plus and minus button functionality for adjusting dish quantities
+     */
+    $('.plus').on('click', function () {
+        const target = $(this).data('target'); // Get the target input field for this button
+        const $input = $(target);
+        let val = parseInt($input.val()) || 0; // Get the current value of the input field
+        $input.val(val + 1).trigger('input'); // Increment the value and trigger the input event
+    });
+
+    $('.minus').on('click', function () {
+        const target = $(this).data('target'); // Get the target input field for this button
+        const $input = $(target);
+        let val = parseInt($input.val()) || 0; // Get the current value of the input field
+        if (val > 0) {
+            $input.val(val - 1).trigger('input'); // Decrement the value and trigger the input event
+        }
+    });
+
+    // Trigger the updateTotal function whenever the input value changes
+    $('.dish-quantity').on('input', updateTotal);
+
+    /**
+     * Form submission handler for adding the bundle to the cart
+     */
+    $form.on('submit', function (e) {
+        e.preventDefault(); // Prevent the default form submission
+
+        // Check if the nonce field exists for security validation
+        if (!$('#add_bundle_to_cart_nonce_field').val()) {
+            alert('Security check failed.'); // Show an error if the nonce is missing
+            return;
+        }
+
+        // Prepare the data to be sent via AJAX
+        const formData = {
+            action: 'add_bundle_to_cart_jby', // Action hook for the server-side AJAX handler
+            dishes: {}, // Object to store selected dishes and their quantities
+            mode: addToCartMode, // Mode for adding items to the cart
+            discount_percentage: <?php echo esc_js($discount_percentage); ?>, // Discount percentage
+            product_id: productId, // Product ID for the bundle
+            nonce: $('#add_bundle_to_cart_nonce_field').val() // Nonce for security validation
+        };
+
+        // Populate the dishes object with selected dishes and their quantities
+        $('.dish-quantity').each(function () {
+            const qty = parseInt($(this).val());
+            if (qty > 0) {
+                const variationID = this.id.replace('dish-', ''); // Extract the variation ID from the input field's ID
+                formData.dishes[variationID] = qty; // Add the dish and its quantity to the dishes object
+            }
+        });
+
+        // Check if at least one dish is selected
+        if ($.isEmptyObject(formData.dishes)) {
+            alert('Please select at least one dish.'); // Show an error if no dishes are selected
+            return;
+        }
+
+        // Show loading indicator and disable the add to cart button during the AJAX request
+        $loadingIndicator.show();
+        $('.progress-bar').animate({ width: '100%' }, 2000); // Animate the progress bar
+        $('#add-to-cart-button').prop('disabled', true);
+
+        // Send the AJAX request to add the bundle to the cart
+        $.ajax({
+            url: '<?php echo admin_url("admin-ajax.php"); ?>', // URL for the AJAX request
+            type: 'POST', // HTTP method
+            data: formData, // Data to be sent
+            success: function (response) {
+                if (response.success) {
+                    $('#redirect-message').show(); // Show a success message
+                    $(document.body).trigger('wc_fragment_refresh'); // Refresh WooCommerce fragments
+                    setTimeout(function () {
+                        window.location.href = '<?php echo wc_get_cart_url(); ?>'; // Redirect to the cart page
+                    }, 1000);
+                } else {
+                    alert(response.data || 'Failed to add items to cart.'); // Show an error message
+                }
+            },
+            error: function () {
+                alert('Failed to process the request.'); // Show an error message for AJAX failure
+            },
+            complete: function () {
+                $loadingIndicator.hide(); // Hide the loading indicator
+                $('#add-to-cart-button').prop('disabled', false); // Re-enable the add to cart button
+            }
+        });
+    });
+});
